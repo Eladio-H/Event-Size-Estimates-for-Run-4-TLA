@@ -1,0 +1,8 @@
+Output:
+  ntuple: "output21.root"
+Trigger:
+  Selection:
+    chains:
+    - "HLT_2mu4_PhysicsTLA_L12MU8F"
+  Emu:
+    config: "../TrigAna/run/ntup/share/chains.yaml"

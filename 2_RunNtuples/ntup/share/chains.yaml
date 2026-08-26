@@ -1,0 +1,25 @@
+MySimpleChain:
+  Config:
+    Name:
+      prefix: "EMULATION"
+      suffix: ""
+      delim: "_"
+      level1: "L0"
+      level2: "EF"
+  Chain:
+    Level2:
+      Leg0:
+        multiplicity: 2
+        collection: "HLT_MuonsCB_RoI"
+        Items:
+          Pt:
+            label: "mu"
+            min: 4
+    Level1:
+      Leg0: 
+        multiplicity: 2
+        collection: "HLT_MuonL2SAInfo"
+        Items:
+          Pt:
+            label: "Mu"
+            min: 8

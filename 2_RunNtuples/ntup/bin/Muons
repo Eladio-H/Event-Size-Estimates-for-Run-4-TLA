@@ -1,0 +1,52 @@
+#!/usr/bin/env python
+
+import sys
+from SQUEAK.hub import *
+
+
+def _parser():
+    return AnalysisArgumentParser()
+
+def _job_cfg():
+    parser = _parser()
+    flags, args = analysis_configuration(parser)
+    cfg = default_sequence_cfg(flags, "Trigger")
+
+    # --- Import ntupler and matching configs ---
+    from SQUEAK.algs.postprocessing.DumpToNtupleAlgConfig import muon_dump_to_ntuple_alg_cfg
+    from SQUEAK.algs.truth.TruthMatchingAlgConfig import truth_matching_cfg
+
+    cfg.merge(muon_dump_to_ntuple_alg_cfg(flags, "Muons"))
+    cfg.merge(muon_dump_to_ntuple_alg_cfg(flags, "HLT_MuonsCB_RoI", Decorators=["author"]))
+    #cfg.merge(muon_dump_to_ntuple_alg_cfg(flags, "HLT_MuonsCB_RoIAux."))
+    #cfg.merge(muon_dump_to_ntuple_alg_cfg(flags, "HLT_MuonsCB_RoIAuxDyn.author"))
+
+    for cont in ["HLT_MuonsCB_FS"]:
+        cfg.merge(muon_dump_to_ntuple_alg_cfg(flags, cont))
+
+    from SQUEAK.algs.postprocessing.DumpToNtupleAlgConfig import track_dump_to_ntuple_alg_cfg
+    for cont in ["HLT_IDTrack_Muon_IDTrig", "HLT_IDTrack_Muon_FTF", "HLT_MSExtrapolatedMuons_RoITrackParticles", "HLT_CBCombinedMuon_RoITrackParticles"]:
+        cfg.merge(track_dump_to_ntuple_alg_cfg(flags, cont, Decorators=["d0", "z0", "sigma_d0", "sigma_z0"]))
+
+    from SQUEAK.algs.postprocessing.DumpToNtupleAlgConfig import l2sa_muon_particle_dump_to_ntuple_alg_cfg
+    cfg.merge(l2sa_muon_particle_dump_to_ntuple_alg_cfg(flags, "HLT_MuonL2SAInfo"))
+
+    # Write stuff to ntuple
+    nt = NtupleDumper(flags)
+    cfg.merge(
+        nt.book(Decorators=["mcChannelNumber", "mcEventWeight"]).eventinfo()
+  )
+
+    from SQUEAK.analyses.trigger import trigger_emulation_cfg
+    cfg.merge(trigger_emulation_cfg(flags, isSignal=args.isSignal))
+
+    return cfg, flags, args
+
+def _main():
+    cfg, flags, args = _job_cfg()
+    if args.dry_run:
+        return 1
+    return run_job(flags, args, cfg, args.run_dir).isSuccess()
+
+if __name__ == "__main__":
+    sys.exit(0 if _main() else 1)
