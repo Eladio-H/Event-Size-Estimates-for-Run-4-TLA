@@ -21,7 +21,7 @@ fi
 #
 #===================================
 
-SAMPLES=/eos/user/e/ehossein/TrigAna/run/ntup/mc21_14TeV.801165.Py8EG_A14NNPDF23LO_jj_JZ0.deriv.DAOD_JETM42.e8557_s4422_r17017_p7139/DAOD_JETM42.48089457._000061.pool.root.1
+SAMPLES=/mc21_14TeV/DAOD_JETM42.48089457._000061.pool.root.1
 
 #===================================
 #
