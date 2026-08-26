@@ -41,7 +41,6 @@ cmd = [
     "--filesInput", args.rawfile,
     "--save-output", args.output,
     "--number-of-events", "100",
-    "--log-level", "DEBUG",
     "TriggerJobOpts.runHLT",
     f'Trigger.triggerMenuSetup="{args.menu}"',
     "Trigger.doLVL1=True",

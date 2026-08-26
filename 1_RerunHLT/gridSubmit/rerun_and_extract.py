@@ -7,12 +7,9 @@ Per RAW file:
   2. trigbs_extractStream.py -s TLA <hlt_output>              -> extracted RAW
   3. dumpRAW.py <extracted_file> --lumi-lookup <csv> [--filter <regex>]
      -> CSV dump of container sizes/multiplicities for the extracted RAW.
-  4. Delete the ORIGINAL input RAW file (once the HLT rerun has produced
-     its output -- happens regardless of what trigbs_extractStream.py
-     does downstream).
-  5. Delete the intermediate HLT output file (whether trigbs_extractStream.py
+  4. Delete the intermediate HLT output file (whether trigbs_extractStream.py
      succeeds or finds zero events for the stream).
-  6. Keep BOTH the extracted TLA RAW file and its CSV dump, under whatever
+  5. Keep BOTH the extracted TLA RAW file and its CSV dump, under whatever
      filename trigbs_extractStream.py/dumpRAW.py give them, renamed with
      a FINAL_TAG/CSV_TAG suffix.
 
@@ -128,11 +125,6 @@ def process_one_file(input_file, args):
 
     if not os.path.isfile(hlt_output):
         raise RuntimeError(f"Expected HLT output file not found: {hlt_output}")
-
-    # Input RAW is no longer needed once the HLT rerun has produced its
-    # output, regardless of what happens downstream.
-    os.remove(input_file)
-    print(f"[INFO] Deleted original input RAW file: {input_file}")
 
     try:
         result = subprocess.run(

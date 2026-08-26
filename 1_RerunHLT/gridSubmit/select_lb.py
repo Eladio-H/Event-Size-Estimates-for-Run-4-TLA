@@ -10,15 +10,15 @@ RUCIO_ACCOUNT = os.environ["USER"]
 RUCIO_SCOPE = f"user.{RUCIO_ACCOUNT}"
 
 # Version tag for the dataset/filelist, e.g. `python thisscript.py 3` -> v3.
-# Defaults to v2 if not given.
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "2"
+# Defaults to v1 if not given.
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "1"
 
 files = [
-    "lumi_lookup_507671.csv",
-    "lumi_lookup_507733.csv",
-    "lumi_lookup_507758.csv",
-    "lumi_lookup_508073.csv",
-    "lumi_lookup_509891.csv",
+    "LBData/lumi_lookup_507671.csv",
+    "LBData/lumi_lookup_507733.csv",
+    "LBData/lumi_lookup_507758.csv",
+    "LBData/lumi_lookup_508073.csv",
+    "LBData/lumi_lookup_509891.csv",
 ]
 
 CATALOG_CACHE_DIR = "rucio_catalog_cache"
@@ -226,6 +226,23 @@ def ensure_rucio_dataset(dataset_did):
         print(f"[WARNING] Could not create dataset {dataset_did} ({e})")
 
 
+def dataset_exists(dataset_did):
+    """Check whether a rucio dataset DID already exists via get-metadata."""
+    try:
+        subprocess.run(
+            ["rucio", "get-metadata", dataset_did],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").lower()
+        if "not found" in stderr:
+            return False
+        raise  # some other error (auth, network, etc.) — don't silently swallow it
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        raise
+
+
 def attach_files_to_dataset(dataset_did, file_dids):
     """Attach a batch of file DIDs to a rucio dataset."""
     if not file_dids:
@@ -242,155 +259,146 @@ def attach_files_to_dataset(dataset_did, file_dids):
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         print(f"[WARNING] Could not attach files to {dataset_did} ({e})")
 
+if not dataset_exists(DATASET):
+    all_bin_centers = []
+    all_bin_counts = []
+    filelist_lines = []  # all selected files (both streams), goes into the single DATASET
+    skipped_lb_report = []  # track what we dropped, for a sanity check at the end
 
-all_bin_centers = []
-all_bin_counts = []
-filelist_lines = []  # all selected files (both streams), goes into the single DATASET
-skipped_lb_report = []  # track what we dropped, for a sanity check at the end
+    for f in files:
+        run = int(f.split("_")[-1].replace(".csv", ""))
+        stream = stream_for_run(run)
+        raw_tag = raw_tag_for_run(run)
+        suffix = file_suffix_for_run(run)
+        n = LBS_PER_RUN.get(run, DEFAULT_LBS_PER_RUN)
 
-for f in files:
-    run = int(f.split("_")[-1].replace(".csv", ""))
-    stream = stream_for_run(run)
-    raw_tag = raw_tag_for_run(run)
-    suffix = file_suffix_for_run(run)
-    n = LBS_PER_RUN.get(run, DEFAULT_LBS_PER_RUN)
+        df = pd.read_csv(f)
+        df["source"] = f
 
-    df = pd.read_csv(f)
-    df["source"] = f
+        df = exclude_lb_ranges(df, run)
 
-    df = exclude_lb_ranges(df, run)
+        mu_cut = MU_CUT_OVERRIDES.get(run, DEFAULT_MU_CUT)
+        print(f"[INFO] Run {run}: applying mu > {mu_cut} cut, requesting {n} LBs from {stream}")
+        df = df[df["mu"] > mu_cut]
 
-    mu_cut = MU_CUT_OVERRIDES.get(run, DEFAULT_MU_CUT)
-    print(f"[INFO] Run {run}: applying mu > {mu_cut} cut, requesting {n} LBs from {stream}")
-    df = df[df["mu"] > mu_cut]
+        valid_lbs = get_valid_lbs(run)
 
-    valid_lbs = get_valid_lbs(run)
+        if valid_lbs is not None:
+            n_before = df["lb"].nunique()
+            df = df[df["lb"].isin(valid_lbs)]
+            n_after = df["lb"].nunique()
+            if n_after < n_before:
+                dropped = n_before - n_after
+                print(f"[INFO] {f}: dropped {dropped} LB(s) with mu>{mu_cut} but no "
+                    f"registered RAW file in Rucio")
+                skipped_lb_report.append((run, dropped, n_before, n_after))
 
-    if valid_lbs is not None:
-        n_before = df["lb"].nunique()
-        df = df[df["lb"].isin(valid_lbs)]
-        n_after = df["lb"].nunique()
-        if n_after < n_before:
-            dropped = n_before - n_after
-            print(f"[INFO] {f}: dropped {dropped} LB(s) with mu>{mu_cut} but no "
-                  f"registered RAW file in Rucio")
-            skipped_lb_report.append((run, dropped, n_before, n_after))
+        df = df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+        if len(df) == 0:
+            print(f"WARNING: no rows with mu > {mu_cut} (and a valid RAW file) in {f}, skipping")
+            continue
 
-    if len(df) == 0:
-        print(f"WARNING: no rows with mu > {mu_cut} (and a valid RAW file) in {f}, skipping")
-        continue
+        if run in KEEP_ALL_LBS_RUNS:
+            kept_lbs = sorted(df["lb"].unique())
+            all_files_by_lb = get_all_files_by_lb(run)
 
-    if run in KEEP_ALL_LBS_RUNS:
-        kept_lbs = sorted(df["lb"].unique())
-        all_files_by_lb = get_all_files_by_lb(run)
+            if all_files_by_lb is None:
+                # No catalog access at all: fall back to one canonical file per LB.
+                files_by_lb = {
+                    lb: [f"data25_13p6TeV:data25_13p6TeV.{run:08d}.{stream}.{raw_tag}.RAW."
+                        f"_lb{lb:04d}._SFO-20._0001.{suffix}"]
+                    for lb in kept_lbs
+                }
+            else:
+                # Restrict to LBs that survived the mu cut/exclusion/validation,
+                # and pull ALL registered files (any SFO unit, any sequence) for
+                # those LBs so we can use extras as additional statistics.
+                files_by_lb = {lb: all_files_by_lb[lb] for lb in kept_lbs if lb in all_files_by_lb}
 
-        if all_files_by_lb is None:
-            # No catalog access at all: fall back to one canonical file per LB.
-            files_by_lb = {
-                lb: [f"data25_13p6TeV:data25_13p6TeV.{run:08d}.{stream}.{raw_tag}.RAW."
-                     f"_lb{lb:04d}._SFO-20._0001.{suffix}"]
-                for lb in kept_lbs
-            }
-        else:
-            # Restrict to LBs that survived the mu cut/exclusion/validation,
-            # and pull ALL registered files (any SFO unit, any sequence) for
-            # those LBs so we can use extras as additional statistics.
-            files_by_lb = {lb: all_files_by_lb[lb] for lb in kept_lbs if lb in all_files_by_lb}
+            n_distinct_lbs = len(files_by_lb)
+            n_total_files = sum(len(v) for v in files_by_lb.values())
+            print(f"[INFO] Run {run}: {n_distinct_lbs} distinct LBs available with "
+                f"{n_total_files} total files; requesting {n}")
 
-        n_distinct_lbs = len(files_by_lb)
-        n_total_files = sum(len(v) for v in files_by_lb.values())
-        print(f"[INFO] Run {run}: {n_distinct_lbs} distinct LBs available with "
-              f"{n_total_files} total files; requesting {n}")
+            selected = round_robin_select(files_by_lb, n)
+            if len(selected) < n:
+                print(f"[WARNING] Run {run}: only {len(selected)}/{n} files available "
+                    f"even after using every SFO/sequence variant per LB")
 
-        selected = round_robin_select(files_by_lb, n)
-        if len(selected) < n:
-            print(f"[WARNING] Run {run}: only {len(selected)}/{n} files available "
-                  f"even after using every SFO/sequence variant per LB")
+            for lb, did in selected:
+                mu_val = df.loc[df["lb"] == lb, "mu"].iloc[0]
+                all_bin_centers.append(mu_val)
+                all_bin_counts.append(1)
+                filelist_lines.append(did)
 
-        for lb, did in selected:
-            mu_val = df.loc[df["lb"] == lb, "mu"].iloc[0]
-            all_bin_centers.append(mu_val)
-            all_bin_counts.append(1)
-            filelist_lines.append(did)
+            print(f"Run {run}: added {len(selected)} file(s) "
+                f"({n_distinct_lbs} distinct LBs, extras used for additional statistics)")
+            continue
 
-        print(f"Run {run}: added {len(selected)} file(s) "
-              f"({n_distinct_lbs} distinct LBs, extras used for additional statistics)")
-        continue
+        # Increase total bins until we get exactly n non-empty ones (within this run)
+        test_bins = n
+        while True:
+            counts, edges = np.histogram(df["mu"], bins=test_bins)
+            if np.sum(counts > 0) >= n:
+                break
+            test_bins += 1
+            if test_bins > 10_000:  # safety valve in case a run has < n distinct mu values
+                print(f"WARNING: {f} cannot supply {n} non-empty bins "
+                    f"(only {np.sum(counts > 0)} available); using what's there")
+                break
 
-    # Increase total bins until we get exactly n non-empty ones (within this run)
-    test_bins = n
-    while True:
-        counts, edges = np.histogram(df["mu"], bins=test_bins)
-        if np.sum(counts > 0) >= n:
-            break
-        test_bins += 1
-        if test_bins > 10_000:  # safety valve in case a run has < n distinct mu values
-            print(f"WARNING: {f} cannot supply {n} non-empty bins "
-                  f"(only {np.sum(counts > 0)} available); using what's there")
-            break
+        nonempty_mask = counts > 0
+        nonempty_left = edges[:-1][nonempty_mask][:n]
+        nonempty_right = edges[1:][nonempty_mask][:n]
+        n_actual = len(nonempty_left)
+        if n_actual < n:
+            print(f"WARNING: {f} only yielded {n_actual}/{n} bins")
 
-    nonempty_mask = counts > 0
-    nonempty_left = edges[:-1][nonempty_mask][:n]
-    nonempty_right = edges[1:][nonempty_mask][:n]
-    n_actual = len(nonempty_left)
-    if n_actual < n:
-        print(f"WARNING: {f} only yielded {n_actual}/{n} bins")
+        df["bin"] = -1
+        for i, (left, right) in enumerate(zip(nonempty_left, nonempty_right)):
+            mask = (df["mu"] >= left) & (df["mu"] < right)
+            df.loc[mask, "bin"] = i
 
-    df["bin"] = -1
-    for i, (left, right) in enumerate(zip(nonempty_left, nonempty_right)):
-        mask = (df["mu"] >= left) & (df["mu"] < right)
-        df.loc[mask, "bin"] = i
+        bin_centers = 0.5 * (nonempty_left + nonempty_right)
+        bin_counts = [len(df[df["bin"] == i]) for i in range(n_actual)]
+        all_bin_centers.extend(bin_centers)
+        all_bin_counts.extend(bin_counts)
 
-    bin_centers = 0.5 * (nonempty_left + nonempty_right)
-    bin_counts = [len(df[df["bin"] == i]) for i in range(n_actual)]
-    all_bin_centers.extend(bin_centers)
-    all_bin_counts.extend(bin_counts)
+        for i in range(n_actual):
+            bin_df = df[df["bin"] == i][["source", "lb", "mu"]]
+            contents = bin_df.values.tolist()
+            if contents:
+                source, lb, mu = contents[0]
+                sfo_tag = valid_lbs.get(lb, "20") if valid_lbs is not None else "20"
+                filename = (
+                    f"data25_13p6TeV:data25_13p6TeV."
+                    f"{run:08d}."
+                    f"{stream}.{raw_tag}.RAW."
+                    f"_lb{lb:04d}."
+                    f"_SFO-{sfo_tag}._0001.{suffix}"
+                )
+                filelist_lines.append(filename)
+                print(f"Run {run}, bin {i} first entry: {contents[0]}")
 
-    for i in range(n_actual):
-        bin_df = df[df["bin"] == i][["source", "lb", "mu"]]
-        contents = bin_df.values.tolist()
-        if contents:
-            source, lb, mu = contents[0]
-            sfo_tag = valid_lbs.get(lb, "20") if valid_lbs is not None else "20"
-            filename = (
-                f"data25_13p6TeV:data25_13p6TeV."
-                f"{run:08d}."
-                f"{stream}.{raw_tag}.RAW."
-                f"_lb{lb:04d}."
-                f"_SFO-{sfo_tag}._0001.{suffix}"
-            )
-            filelist_lines.append(filename)
-            print(f"Run {run}, bin {i} first entry: {contents[0]}")
+    # Write filelist
+    filelist_name = f"filelist_v{VERSION}.txt"
+    with open(filelist_name, "w") as out:
+        for line in filelist_lines:
+            out.write(line + "\n")
 
-# Plot (pooled across runs just for visualization)
-plt.plot(all_bin_centers, all_bin_counts, 'o', markersize=4)
-plt.xlabel("mu")
-plt.ylabel("Count")
-plt.title("mu distribution (per-run binning)")
-plt.tight_layout()
-plt.savefig("mu_histogram.png", dpi=150)
-plt.show()
+    print(f"\nWritten {len(filelist_lines)} filenames to {filelist_name} "
+        f"(runs {sorted(HIGH_MU_RUNS)} @ {max(LBS_PER_RUN.values())} LBs each from EnhancedBias, "
+        f"remaining runs @ {DEFAULT_LBS_PER_RUN} LBs each from physics_Main)")
 
-# Write filelist
-filelist_name = f"filelist_v{VERSION}.txt"
-with open(filelist_name, "w") as out:
-    for line in filelist_lines:
-        out.write(line + "\n")
+    # --- Create/populate the single custom rucio dataset (*.vN) ---
+    print("\n=== Creating/populating rucio dataset ===")
+    ensure_rucio_dataset(DATASET)
+    attach_files_to_dataset(DATASET, filelist_lines)
 
-print(f"\nWritten {len(filelist_lines)} filenames to {filelist_name} "
-      f"(runs {sorted(HIGH_MU_RUNS)} @ {max(LBS_PER_RUN.values())} LBs each from EnhancedBias, "
-      f"remaining runs @ {DEFAULT_LBS_PER_RUN} LBs each from physics_Main)")
-
-# --- Create/populate the single custom rucio dataset (*.vN) ---
-print("\n=== Creating/populating rucio dataset ===")
-ensure_rucio_dataset(DATASET)
-attach_files_to_dataset(DATASET, filelist_lines)
-
-if skipped_lb_report:
-    print("\n=== LB validation summary (dropped due to missing Rucio files) ===")
-    for run, dropped, before, after in skipped_lb_report:
-        print(f"  Run {run}: {before} -> {after} LBs available (dropped {dropped})")
-else:
-    print("\nNo LBs were dropped due to missing catalog entries.")
+    if skipped_lb_report:
+        print("\n=== LB validation summary (dropped due to missing Rucio files) ===")
+        for run, dropped, before, after in skipped_lb_report:
+            print(f"  Run {run}: {before} -> {after} LBs available (dropped {dropped})")
+    else:
+        print("\nNo LBs were dropped due to missing catalog entries.")

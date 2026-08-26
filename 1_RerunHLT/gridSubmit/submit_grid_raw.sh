@@ -15,8 +15,7 @@
 # output dataset instead of CSVs.
 #
 # Usage:
-#   ./submit_grid_raw.sh --version v1 --input-version 3 --trigger HLT_2mu4_PhysicsTLA_L12MU8F --category muon
-#   ./submit_grid_raw.sh --version v1 --input-version 3 --trigger "HLT_j20_pf_ftf_preselj140_PhysicsTLA_L1jJ90,HLT_2mu4_PhysicsTLA_L12MU8F" --category jet_muon
+#   ./submit_grid_raw.sh --version v1 --input-version 3 --trigger HLT_2mu4_PhysicsTLA_L12MU8F
 #
 set -euo pipefail
 
@@ -62,10 +61,11 @@ fi
 
 
 # This is the single consolidated dataset produced by
-# select_files_and_make_datasets.py <INPUT_VERSION> -- e.g. v3 holds all
+# select_files_and_make_datasets.py <INPUT_VERSION> -- e.g. v6 holds all
 # 5 runs (physics_Main + EnhancedBias) together, no per-run split.
-#INDS="user.${USER}:user.${USER}.raw_selection.v${INPUT_VERSION}"
-INDS="user.ehossein:user.ehossein.raw_selection.v6"
+python select_lb.py ${INPUT_VERSION}
+INDS="user.${USER}:user.${USER}.raw_selection.v${INPUT_VERSION}"
+#INDS="user.ehossein:user.ehossein.raw_selection.v6"
 
 echo "=================================================="
 echo "Version       : ${VERSION}"
@@ -82,7 +82,7 @@ pathena \
   --trf "${TRF_CMD}" \
   --extFile="rerun_and_extract.py,rerunHLT.py,dumpRAW.py,lumi_lookup_combined.csv" \
   --inDS "${INDS}" \
-  --outDS "user.${USER}.CompressedRAW_and_ByContainer_JetEventSize_TLA.${VERSION}" \
+  --outDS "user.${USER}.CompressedRAW_and_ByContainer_MuonEventSize_TLA.${VERSION}" \
   --extOutFile="*.data,*.csv" \
   --noEmail \
   --nFilesPerJob 5 \
