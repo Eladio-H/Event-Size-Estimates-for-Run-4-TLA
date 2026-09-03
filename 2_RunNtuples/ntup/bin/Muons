@@ -25,8 +25,18 @@ def _job_cfg():
         cfg.merge(muon_dump_to_ntuple_alg_cfg(flags, cont))
 
     from SQUEAK.algs.postprocessing.DumpToNtupleAlgConfig import track_dump_to_ntuple_alg_cfg
-    for cont in ["HLT_IDTrack_Muon_IDTrig", "HLT_IDTrack_Muon_FTF", "HLT_MSExtrapolatedMuons_RoITrackParticles", "HLT_CBCombinedMuon_RoITrackParticles"]:
-        cfg.merge(track_dump_to_ntuple_alg_cfg(flags, cont, Decorators=["d0", "z0", "sigma_d0", "sigma_z0"]))
+
+    cfg.merge(
+    track_dump_to_ntuple_alg_cfg(
+        flags,
+        "HLT_IDTrack_Muon_IDTrig",
+        Decorators=["d0", "z0", "sigma_d0", "sigma_z0"],
+        MuonContainer="HLT_MuonsCB_RoI"
+    )
+)
+
+    for cont in ["HLT_IDTrack_Muon_FTF", "HLT_MSExtrapolatedMuons_RoITrackParticles", "HLT_CBCombinedMuon_RoITrackParticles"]:
+        cfg.merge(track_dump_to_ntuple_alg_cfg(flags, cont, Decorators=["d0", "z0", "sigma_d0", "sigma_z0"] ))
 
     from SQUEAK.algs.postprocessing.DumpToNtupleAlgConfig import l2sa_muon_particle_dump_to_ntuple_alg_cfg
     cfg.merge(l2sa_muon_particle_dump_to_ntuple_alg_cfg(flags, "HLT_MuonL2SAInfo"))
@@ -35,7 +45,7 @@ def _job_cfg():
     nt = NtupleDumper(flags)
     cfg.merge(
         nt.book(Decorators=["mcChannelNumber", "mcEventWeight"]).eventinfo()
-  )
+    )
 
     from SQUEAK.analyses.trigger import trigger_emulation_cfg
     cfg.merge(trigger_emulation_cfg(flags, isSignal=args.isSignal))
